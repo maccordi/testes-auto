@@ -1,0 +1,99 @@
+# Importar bibliotecas
+from selenium import webdriver
+from selenium.webdriver.common.by import By
+from selenium.webdriver.common.keys import Keys
+from selenium.webdriver.common.action_chains import ActionChains
+from selenium.webdriver.support.ui import WebDriverWait
+from selenium.webdriver.chrome.options import Options
+from datetime import datetime
+import time
+import os
+import glob
+import openpyxl
+import pandas as pd
+import pyodbc
+import schedule
+
+# Configuração do WebDriver e diretório de download
+download_dir = os.path.abspath("G:/ACB/ACABAMENTO LAMINACAO I/COMPARTILHADO/GFO/Miguel/Pendencias Ativas")
+prefs = {
+    'download.default_directory': download_dir,
+    'download.prompt_for_download': False,
+    'safebrowsing.enabled': True
+}
+options = Options()
+options.add_experimental_option('prefs', prefs)
+driver_path = 'C:/Users/maccordi/Documents/chromedriver.exe'
+
+# Configuração inicial do WebDriver (definido uma vez)
+driver = webdriver.Chrome(options=options, executable_path=driver_path)
+
+# Função principal executada em loop infinito
+while True:
+    try:
+        # (I) Navegação no MES [SELENIUM]
+        # Acessa a página e faz login
+        driver.get('LINK DO MES')
+        WebDriverWait(driver, 10).until(lambda d: d.find_element(By.NAME, '_Login')).send_keys('LOGIN')
+        driver.find_element(By.NAME, '_PASSWORD').send_keys('SENHA')
+        driver.find_element(By.XPATH, '/html/body/form/table/tbody/tr/td/div/table/tbody/tr[2]/td[3]/a').click()
+        
+        # Navegação para a página de pendências usando ActionChains
+        elemento_hover1 = driver.find_element(By.XPATH, '/html/body/form/span[1]/div[1]/table/tbody/tr/td[1]/div/span')
+        elemento_hover2 = driver.find_element(By.XPATH, '/html/body/form/span[1]/div[2]/table/tbody/tr/td/div[8]')
+        elemento_menu = driver.find_element(By.XPATH, '/html/body/form/span[1]/div[9]/table/tbody/tr/td/div[7]/span')
+        
+        # Realiza a ação de hover para acessar a página de pendências
+        action_chains = ActionChains(driver)
+        action_chains.move_to_element(elemento_hover1).perform()
+        action_chains.move_to_element(elemento_hover2).perform()
+        action_chains.click(elemento_menu).perform()
+
+        # Filtra a área desejada e baixa o arquivo Excel
+        WebDriverWait(driver, 10).until(lambda d: d.find_element(By.XPATH, '/html/body/form/fieldset[1]/table/tbody/tr/td/table/tbody/tr[3]/td/table/tbody/tr[4]/td[4]/table/tbody/tr/td/table/tbody/tr/td/span/input')).send_keys('Acabamento L1')
+        driver.find_element(By.XPATH, '/html/body/form/fieldset[1]/table/tbody/tr/td/table/tbody/tr[4]/td/table/tbody/tr[2]/td[3]/input').click()  # Botão de Filtrar
+        WebDriverWait(driver, 10).until(lambda d: d.find_element(By.XPATH, '/html/body/form/fieldset[2]/table/tbody/tr/td/table/tbody/tr[3]/td/table/tbody/tr/td/table/tbody/tr[1]/td/div/div[2]/div/img[1]')).click()  # Botão de Baixar
+        time.sleep(4)  # Tempo para garantir o download completo
+        driver.close()  # Fecha o WebDriver ao final da sessão
+        time.sleep(2)
+
+        # (II) Comparação de Tabelas [PANDAS]
+        # Definindo o caminho da pasta e obtendo o arquivo mais recente na pasta
+        caminho_pasta = r"G:/ACB/ACABAMENTO LAMINACAO I/COMPARTILHADO/GFO/Miguel/Pendencias Ativas"
+        caminho_arquivo_novo = max(glob.glob(os.path.join(caminho_pasta, '*.xls')), key=os.path.getctime)
+
+        # Carregando a planilha nova e o banco de dados existente
+        caminho_banco_dados = os.path.join(download_dir, 'BD.xlsx')
+        df_novo = pd.read_excel(caminho_arquivo_novo)
+        df_bd = pd.read_excel(caminho_banco_dados)
+
+        # Atualizando o Banco de Dados com novos dados da planilha recente
+        # Aqui, substituímos valores diretamente no BD onde houver novas informações
+        df_bd.update(df_novo)
+        df_bd.to_excel(caminho_banco_dados, index=False)  # Salva o BD atualizado
+
+        # (III) Identificação e Arquivamento de Pendências Concluídas
+        # Filtra pendências concluídas que estão no BD, mas não na planilha nova
+        df_arquivados = df_bd[~df_bd['OP'].isin(df_novo['OP'])]
+
+        # Arquiva pendências concluídas em "Arquivados.xlsx"
+        caminho_arquivo_arquivados = os.path.join(caminho_pasta, 'Arquivados.xlsx')
+        if os.path.isfile(caminho_arquivo_arquivados):
+            df_arquivados_existente = pd.read_excel(caminho_arquivo_arquivados, sheet_name='Arquivados')
+            df_arquivados_atualizados = pd.concat([df_arquivados_existente, df_arquivados])
+        else:
+            df_arquivados_atualizados = df_arquivados
+
+        # Salva os dados arquivados atualizados
+        with pd.ExcelWriter(caminho_arquivo_arquivados, mode='w', engine='openpyxl') as writer:
+            df_arquivados_atualizados.to_excel(writer, sheet_name='Arquivados', index=False)
+
+        print('Banco de dados atualizado com sucesso!')
+
+    except Exception as e:
+        # Log de erro para ajudar na identificação de problemas
+        print(f"Erro encontrado: {e}")
+
+    finally:
+        # Aguarda 1 hora antes de repetir o processo
+        time.sleep(3600)
